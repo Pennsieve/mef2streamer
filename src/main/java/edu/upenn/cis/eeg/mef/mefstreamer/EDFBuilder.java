@@ -67,6 +67,32 @@ public class EDFBuilder {
         return sb.toString();
     }
 
+    /**
+     * Builds the CHANNEL_META payload.
+     *
+     * The sample frames carry raw A/D counts, so "unit" is reported as counts.
+     * voltage_conversion_factor is the microvolts-per-count scale from the MEF
+     * header: consumers must multiply samples by it to obtain microvolts.
+     * Without it the counts are not interpretable as a physical measurement.
+     */
+    static String channelMetaJson(String channelName, String typeStr, String description,
+                                  double lowCutHz, double highCutHz, double rateHz,
+                                  double voltageConversionFactor,
+                                  long reportedStartUs, long reportedEndUs) {
+        return "{"
+                + "\"name\":" + json(channelName) + ","
+                + "\"type\":" + json(typeStr) + ","
+                + "\"description\":" + json(description) + ","
+                + "\"unit\":" + json("counts") + ","
+                + "\"voltage_conversion_factor\":" + voltageConversionFactor + ","
+                + "\"low_cut_hz\":" + lowCutHz + ","
+                + "\"high_cut_hz\":" + highCutHz + ","
+                + "\"rate_hz\":" + rateHz + ","
+                + "\"reported_start_us\":" + reportedStartUs + ","
+                + "\"reported_end_us\":" + reportedEndUs
+                + "}";
+    }
+
     /** Length-prefixed frame writer to stdout: [type:1][len:4 LE][payload]. */
     static final class Framer {
         private final BufferedOutputStream out;
@@ -152,17 +178,9 @@ public class EDFBuilder {
                         channelName, rateHz, totalBlocks, tolUs);
 
                 // ---- META ----
-                String metaJson = "{"
-                        + "\"name\":" + json(channelName) + ","
-                        + "\"type\":" + json(typeStr) + ","
-                        + "\"description\":" + json(description) + ","
-                        + "\"unit\":" + json("counts") + ","
-                        + "\"low_cut_hz\":" + lowCut + ","
-                        + "\"high_cut_hz\":" + highCut + ","
-                        + "\"rate_hz\":" + rateHz + ","
-                        + "\"reported_start_us\":" + reportedStartUs + ","
-                        + "\"reported_end_us\":" + reportedEndUs
-                        + "}";
+                final double voltageConversionFactor = header.getVoltageConversionFactor();
+                String metaJson = channelMetaJson(channelName, typeStr, description, lowCut, highCut,
+                        rateHz, voltageConversionFactor, reportedStartUs, reportedEndUs);
                 System.err.println("JAVA: Sending CHANNEL_META for " + channelName);
                 fr.send(CHANNEL_META, metaJson.getBytes(StandardCharsets.UTF_8));
                 System.err.println("JAVA: Sent CHANNEL_META");
