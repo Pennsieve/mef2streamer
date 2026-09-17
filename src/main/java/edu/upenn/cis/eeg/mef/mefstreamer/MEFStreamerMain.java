@@ -61,10 +61,10 @@ public class MEFStreamerMain {
         int numsignals = mefFiles.length;
 
         // 2. Stream the selected channels to stdout.
-        EDFBuilder mefBuilder = new EDFBuilder(mefFiles, directoryPath, subjectid, numsignals);
+        FrameStreamer streamer = new FrameStreamer(mefFiles, directoryPath, subjectid, numsignals);
 
         try {
-            mefBuilder.build();
+            streamer.build();
         } catch (IOException e) {
             e.printStackTrace();
             System.exit(1);

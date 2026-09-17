@@ -1,12 +1,15 @@
-# edfwriter — MEF2 streamer
+# mef2streamer
 
 Reads MEF2 files (Multiscale Electrophysiology Format — EEG/iEEG time series)
 and streams the decoded samples to stdout as length-prefixed binary frames. This
 is how iEEG.org recordings get into Pennsieve.
 
-**The name is a leftover.** This repo used to write EDF files. It no longer does,
-and there is no EDF code left in it. It decodes MEF and emits a frame stream;
-something downstream decides what to write.
+**MEF2 only.** The header version is checked on open and anything else is
+refused — see [Supported formats](#supported-formats).
+
+This repo was formerly `edfwriter` and wrote EDF files. It no longer does, and
+no EDF code remains: it decodes MEF and emits a frame stream, and something
+downstream decides what to write.
 
 ## How it's used
 
@@ -21,25 +24,48 @@ subprocess, reads the frames off its stdout, and assembles them into NWB.
                                                     processor-mef-timeseries ──> output.nwb
 ```
 
-The processor's `EDFWRITER_REF` build arg defaults to `main`, so **anything
+The processor's build arg for this repo — still named `EDFWRITER_REF`, renamed
+alongside the rest of the cross-repo cleanup — defaults to `main`, so **anything
 merged to main here ships on the next processor image build.** There is no
-release or tag step. Pin `EDFWRITER_REF` to a SHA if you need a build to stay
-put.
+release or tag step. Pin it to a SHA if you need a build to stay put.
+
+## Supported formats
+
+MEF2, and nothing else. `MEFStreamer` reads the header version and throws before
+decoding a block if the major version is not 2.
+
+This matters because MEF header fields sit at fixed byte offsets. Without the
+check, a file in another format parses "successfully" into meaningless values and
+streams out as plausible-looking samples — a silent wrong answer rather than an
+error.
+
+- **MEF3** is a different format entirely: a directory tree (`.mefd`/`.timd`/
+  `.segd`) with different compression, not one flat file per channel. It is also
+  never picked up, since only `*.mef` is globbed.
+- **MEF1** is refused. `MefHeader2` still carries branches for the pre-2.0 field
+  ordering, but they have no test fixture and the RED block decode was never
+  verified against MEF1.
+- **Encrypted MEF** is refused: `Unsupported: encrypted data`.
 
 ## Build
 
 ```
-mvn package        # target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar
+mvn package        # target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar
 mvn test
 ```
 
-Java 8 source level, Maven, JUnit 4. The artifact name matters — the processor's
-Dockerfile copies that exact path.
+Java 8 source level, Maven, JUnit 4.
+
+The build currently also writes a byte-identical copy at the old
+`mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar` name, because
+processor-mef-timeseries copies that exact path and builds this repo from `main`
+by default. Both names ship until that repo is pointed at the new one; the alias
+and its `maven-antrun-plugin` execution come out then.
 
 ## Run
 
 ```
-java -jar target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
+java -jar target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
 ```
 
 `<input-dir>` is a directory of `.mef` files. One file is one channel, and the
@@ -74,8 +100,8 @@ MEF_CHANNELS="EEG AD 01-Ref,EEG PT 01-Ref" java -jar mefstreamer.jar /data/input
 ## Exit codes
 
 `0` only on a complete conversion. `1` for: no argument, path is not a
-directory, no `.mef` files found, an unmatched `MEF_CHANNELS` name, or an IO
-error mid-stream.
+directory, no `.mef` files found, an unmatched `MEF_CHANNELS` name, a file that
+is not MEF2, or an IO error mid-stream.
 
 Note for anyone reading the stream: a non-zero exit can arrive after frames have
 already been written, so check the exit code rather than assuming a stream that
@@ -170,7 +196,7 @@ services:
     volumes:
       - ./data/input:/data/input
       - ./data/output:/data/output
-      - ../edfwriter/target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar:/processor/mefstreamer.jar:ro
+      - ../mef2streamer/target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar:/processor/mefstreamer.jar:ro
     environment:
       MEF_CHANNELS: "${MEF_CHANNELS:-}"
 ```
@@ -187,7 +213,7 @@ Compare this jar's stdout instead. It is deterministic and it is the whole outpu
 of this repo:
 
 ```
-java -jar target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar "$IN" 2>/dev/null | shasum -a 256
+java -jar target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar "$IN" 2>/dev/null | shasum -a 256
 ```
 
 Build the baseline commit in a `git worktree` and hash it the same way.

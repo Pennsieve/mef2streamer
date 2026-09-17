@@ -1,9 +1,13 @@
-# CLAUDE.md — edfwriter
+# CLAUDE.md — mef2streamer
 
 Reads MEF2 files and streams decoded samples on stdout as length-prefixed binary
-frames. Despite the name it does not write EDF any more — that code was removed.
-Its only consumer is `processor-mef-timeseries`, which builds this repo into
-`mefstreamer.jar` and converts the frames to NWB.
+frames. Formerly `edfwriter`; the EDF writing is gone and none of it is coming
+back. Its only consumer is `processor-mef-timeseries`, which builds this repo
+into `mefstreamer.jar` and converts the frames to NWB.
+
+MEF2 only — `MEFStreamer`'s constructor throws on any other header major
+version. MEF3 is a different format entirely (directory-based `.mefd`/`.timd`/
+`.segd`) and was never supported.
 
 Java 8 source level, Maven, JUnit 4.
 
@@ -11,8 +15,8 @@ Java 8 source level, Maven, JUnit 4.
 
 ```
 mvn package                  # jar-with-dependencies in target/
-mvn test                     # 22 tests
-java -jar target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
+mvn test                     # 26 tests
+java -jar target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
 MEF_CHANNELS=A1,B2 java -jar ... <input-dir>    # convert a subset
 ```
 
@@ -44,7 +48,7 @@ streams rather than the whole thing.
 ## Running it through processor-mef-timeseries locally
 
 `processor-mef-timeseries/docker-compose.override.yml` (untracked, local only)
-bind-mounts `../edfwriter/target/mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar`
+bind-mounts this repo's `target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar`
 over `/processor/mefstreamer.jar`. Compose merges it automatically, so
 `mvn package` here then `make run` there exercises the working tree without the
 Dockerfile's clone-from-GitHub. `MEF_CHANNELS` passes through from the host
@@ -63,8 +67,13 @@ This is the whole public surface. Changing any of it breaks the processor:
 - Main class `edu.upenn.cis.eeg.mef.mefstreamer.MEFStreamerMain`, declared in
   the assembly plugin manifest in `pom.xml`.
 - Invoked as `java -jar mefstreamer.jar <INPUT_DIR>`, one positional arg.
-- Artifact name `mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar` — the
-  processor's Dockerfile copies that exact path.
+- Artifact name. The processor's Dockerfile copies
+  `mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar` by exact path, so the build
+  emits a byte-identical copy under that legacy name via `maven-antrun-plugin`
+  even though the artifactId is now `mef2streamer`. **Delete the alias and its
+  antrun execution in the same change that updates the processor** — until then,
+  removing it breaks that image build immediately, because `EDFWRITER_REF`
+  defaults to `main`.
 - Frame protocol `[type:1][len:4 LE][payload]`, types 1–5. See README.
 - `CHANNEL_META` JSON keys. The processor reads `voltage_conversion_factor` and
   warns loudly if it is absent.
@@ -89,6 +98,13 @@ fails to populate silently yields counts passed off as microvolts.
 packages. `MEFStreamer` resolved the same-package one by proximity, not import,
 so editing the wrong copy changed nothing and produced no compile error. Only
 `edu/upenn/cis/eeg/mef/mefstreamer/MefHeader2.java` survives. Do not add another.
+
+**MEF2 is enforced, not assumed.** `MEFStreamer` throws unless the header's
+major version is 2. Header fields sit at fixed offsets, so without that check
+another format parses into nonsense and streams out as plausible samples —
+a silent wrong answer. `MefHeader2` still has pre-2.0 parsing branches; they are
+now unreachable through `MEFStreamer` and have no fixture. Don't re-enable them
+without one.
 
 **Only ten main source files are reachable from `main`.** The repo previously
 held 160. To re-check the closure after adding code:
@@ -128,9 +144,15 @@ Run `mvn clean` and it goes away.
 
 ## Questions
 
+- **Pending cross-repo rename.** This repo is becoming `mef2streamer` on GitHub.
+  Still to do in `processor-mef-timeseries`, as one change: the `git clone` URL
+  and `api.github.com/repos/...` ADD in its Dockerfile, the `EDFWRITER_REF` build
+  arg name, the `cp` of the jar (switch to the `mef2streamer-` name), and
+  `docker-compose.yml`. Then drop the legacy-jar alias here. GitHub 301-redirects
+  a renamed repo for both clone and API, so nothing breaks in the meantime.
 - The processor's `_wait_for_process` logs a non-zero exit code but does not
   raise. A `MEF_CHANNELS` typo makes this jar exit 1 having sent no frames; the
   processor would then see an empty stream rather than a clear failure. Worth
   fixing on the processor side.
-- `EDFBuilder` still takes `directoryPath`, `subjectid` and `numsignals` in its
-  constructor and uses none of them. Left alone to keep this change focused.
+- `FrameStreamer` still takes `directoryPath`, `subjectid` and `numsignals` in
+  its constructor and uses none of them. Left alone to keep this change focused.

@@ -78,7 +78,7 @@ public class ChannelFilterTest {
 
 	@Test
 	public void selectionKeepsInputFileOrderNotRequestOrder() {
-		// EDFBuilder streams channels in array order; the request order is not
+		// FrameStreamer streams channels in array order; the request order is not
 		// meant to reorder the output.
 		File[] selected = ChannelFilter.select(FILES, Arrays.asList("LA01", "A1"));
 

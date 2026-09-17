@@ -12,7 +12,7 @@ import java.util.Locale;
 
 import edu.upenn.cis.db.mefview.services.TimeSeriesPage;
 
-public class EDFBuilder {
+public class FrameStreamer {
 
     // Frame types
     private static final int CHANNEL_META  = 1;
@@ -26,13 +26,13 @@ public class EDFBuilder {
     private final String subjectid;
     private final int numsignals;
 
-    public EDFBuilder(File[] mefFiles, String directoryPath, String subjectid, int numsignals) {
+    public FrameStreamer(File[] mefFiles, String directoryPath, String subjectid, int numsignals) {
         this.files = mefFiles;
         this.directoryPath = directoryPath;
         this.subjectid = subjectid;
         this.numsignals = numsignals;
 
-        System.err.println("JAVA: EDFBuilder init with " + (files == null ? 0 : files.length) + " files");
+        System.err.println("JAVA: FrameStreamer init with " + (files == null ? 0 : files.length) + " files");
     }
 
     /** Little JSON string escaper (Java 8–11 friendly). */

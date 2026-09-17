@@ -12,8 +12,8 @@ import java.util.Set;
  * Picks which .mef files to convert from the MEF_CHANNELS environment variable.
  *
  * Channel names are matched against the .mef filename minus its extension --
- * the same string EDFBuilder emits as "name" in CHANNEL_META -- so what you ask
- * for here is what you see downstream. Matching is case-insensitive.
+ * the same string FrameStreamer emits as "name" in CHANNEL_META -- so what you
+ * ask for here is what you see downstream. Matching is case-insensitive.
  */
 final class ChannelFilter {
 

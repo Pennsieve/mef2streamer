@@ -2,8 +2,8 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-    <groupId>mef2edf</groupId>
-    <artifactId>mef2edf</artifactId>
+    <groupId>mef2streamer</groupId>
+    <artifactId>mef2streamer</artifactId>
     <version>0.0.1-SNAPSHOT</version>
 
     <properties>
@@ -13,6 +13,11 @@
         <maven.compiler.compilerVersion>1.8</maven.compiler.compilerVersion>
 
         <guava.version>17.0</guava.version>
+
+        <!-- The jar name processor-mef-timeseries still copies by exact path.
+             Remove this, and the antrun execution below, once that repo has
+             been pointed at the mef2streamer name. -->
+        <legacy.jar.name>mef2edf-${project.version}-jar-with-dependencies.jar</legacy.jar.name>
     </properties>
 
     <dependencies>
@@ -70,6 +75,34 @@
                         <goals>
                             <goal>single</goal>
                         </goals>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Publish the assembly under its old name as well.
+                 processor-mef-timeseries' Dockerfile copies
+                 mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar by exact path
+                 and builds this repo from main by default, so renaming the
+                 artifact alone would break its image build the moment this
+                 merges. Both names ship until that repo is updated. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>legacy-jar-name</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <copy
+                                    file="${project.build.directory}/${project.build.finalName}-jar-with-dependencies.jar"
+                                    tofile="${project.build.directory}/${legacy.jar.name}"/>
+                            </target>
+                        </configuration>
                     </execution>
                 </executions>
             </plugin>
