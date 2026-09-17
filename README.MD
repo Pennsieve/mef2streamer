@@ -1,35 +1,69 @@
-# MEF to EDF
+# MEF streamer
 
-## Usage 
-This code converts .mef (MEf2) files into .edf (EDF) files. This is used for time series data, specifically eeg or ieeg data. This code is used to transfer all the data from ieeg.org to Pennsieve. 
+Reads MEF2 files (time series EEG/iEEG data) and streams the decoded samples on
+stdout as length-prefixed binary frames. This is how iEEG.org recordings get
+into Pennsieve.
+
+Despite the repo name, this no longer writes EDF files. It is consumed by
+[processor-mef-timeseries](https://github.com/Pennsieve/processor-mef-timeseries),
+which builds this repo into `mefstreamer.jar`, runs it as a subprocess, and
+turns the frames into NWB.
 
 ## Running
 
-Application expects a single argument as an input.
+```
+java -jar mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
+```
 
-This argument is a path to a folder where all the MEF files (mef2) are located. The name of the folder is assumed to be the subject ID and will be used as the naming convention. 
+`<input-dir>` is a folder of `.mef` files. Each file is one channel; the channel
+name is the filename without its extension. The directory name is taken as the
+subject ID.
 
-If you're building in Eclipse you can go to Run > Run Configurations and add the path as an argument ex: `/Users/ddefreitas/Documents/sub-001/`
+Build with `mvn package`. The jar lands in `target/`.
 
-With the example path above there are .mef files which the script will pick up and create EDFs for. Each mef file is a channel and the script will produce 1 to x edfs for each channel based on discontinuities.
+## Selecting channels
 
-EDFs will be output in the same input folder.
+Set `MEF_CHANNELS` to convert only some of the channels in the directory:
 
-The code reads in all of the blocks of one MEF channel and calculates the time difference between each block. If the time difference betweeen blocks is greater than two times the sampling frequency, then a cut is created for a new edf. The code then goes back and finds the local min and max across each channel and scales the data according to EDF spec. Once the data is scaled, it is written out to an EDF and the process begins again until all of the mef data is read. 
+```
+MEF_CHANNELS=A1,B2 java -jar mefstreamer.jar /data/input
+```
 
+- Comma-separated. Whitespace around names is ignored.
+- Matched case-insensitively against the `.mef` filename minus its extension.
+- Unset, empty, or all-blank means convert every channel.
+- **If any requested channel has no matching file, nothing is converted.** The
+  run prints a warning naming the missing channels and the available ones, then
+  exits 1. Converting the subset that happened to match would look like a
+  successful run that is quietly missing a channel.
 
-## Useful tools (Mac OS)
+## Output protocol
 
-- Hex Fiend for viewing EDF files https://hexfiend.com/
-- EDF browser for viewing EDFs https://formulae.brew.sh/cask/edfbrowser
+stdout carries only frames. Every diagnostic goes to stderr.
+
+Each frame is `[type:1][length:4 LE][payload]`:
+
+| Type | Name | Payload |
+|---|---|---|
+| 1 | `CHANNEL_META` | UTF-8 JSON describing the channel |
+| 2 | `SEGMENT_START` | `int64` start time (µs) + `float64` rate (Hz) |
+| 3 | `SAMPLES_INT32` | raw A/D counts, little-endian `int32` |
+| 4 | `SEGMENT_END` | `int64` last sample time (µs) + `int64` sample count |
+| 5 | `END` | empty; sent once after the last channel |
+
+Samples are **raw A/D counts, not microvolts**. `CHANNEL_META` carries
+`voltage_conversion_factor` (microvolts per count, from the MEF header);
+consumers must multiply by it.
+
+A channel is split into segments wherever the recording has a gap. A gap is a
+block whose start time differs from the expected next sample time by more than a
+quarter of one sampling period.
 
 ## EDF spec
 
-Basing code off the base EDF spec: https://www.edfplus.info/specs/edf.html
+The original EDF work was based on https://www.edfplus.info/specs/edf.html
 
+## Useful tools (Mac OS)
 
-## Time Series Graphing 
-
-The branch TimeSeriesGraphing allows the user to graph subsets of their data in order to validate the efficacy of the converter. This branch does not write out edf, but completes all necessary steps in order to properly calculate scaling. The user will need to update the startrange and endrange values in order to pull out only the block of interest. The time is printed in epoch and can be converted in order to compare to graphed mef data (ex. on ieeg.org).
-
-If using ieeg.org, the start time is set to 0 on the graphing tool and the timing will need to be adjusted in accordance with the real start time of the first edf/mef file. 
+- Hex Fiend for viewing binary files https://hexfiend.com/
+- EDF browser https://formulae.brew.sh/cask/edfbrowser
