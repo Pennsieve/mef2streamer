@@ -110,6 +110,25 @@ public class ChannelFilterTest {
 	}
 
 	@Test
+	public void channelNamesMayContainSpacesAndPunctuation() {
+		// Real iEEG.org exports look like "EEG AD 01-Ref.mef". Only whitespace
+		// at the edges of a comma-separated entry is trimmed; spaces inside a
+		// name are part of it.
+		File[] clinical = files("EEG AD 01-Ref.mef", "EEG PT 01-Ref.mef");
+
+		File[] selected = ChannelFilter.select(clinical,
+				ChannelFilter.parse("eeg ad 01-ref , EEG PT 01-Ref"));
+
+		assertEquals(Arrays.asList("EEG AD 01-Ref.mef", "EEG PT 01-Ref.mef"), names(selected));
+	}
+
+	@Test
+	public void baseNameKeepsDotsInsideTheName() {
+		assertEquals("EEG AD 01-Ref", ChannelFilter.baseName("EEG AD 01-Ref.mef"));
+		assertEquals("v1.2", ChannelFilter.baseName("v1.2.mef"));
+	}
+
+	@Test
 	public void baseNameStripsOnlyTheExtension() {
 		assertEquals("A1", ChannelFilter.baseName("A1.mef"));
 		assertEquals("sub-001_run-2", ChannelFilter.baseName("sub-001_run-2.mef"));
