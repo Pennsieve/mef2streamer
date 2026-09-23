@@ -25,3 +25,6 @@
 .DS_Store
 Thumbs.db
 
+
+# Ignore generated EDF output
+*.edf

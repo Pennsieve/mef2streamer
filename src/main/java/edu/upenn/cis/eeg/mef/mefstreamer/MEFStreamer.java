@@ -107,9 +107,20 @@ public final class MEFStreamer implements Closeable {
 		byte[] headerBytes = new byte[1024];
 		this.mefInputStream.readFully(headerBytes);
 		this.mefHeader = new MefHeader2(headerBytes);
-		
-		
-		
+
+		// Reject anything that isn't MEF2 before decoding a single block. Nothing
+		// downstream checks the version, and the header fields sit at fixed
+		// offsets, so another format parses "successfully" into nonsense and
+		// streams out as plausible-looking samples. Failing here is the only
+		// place that mistake is still cheap to catch.
+		final int major = mefHeader.getHeaderVersionMajor();
+		if (major != MefHeader2.HEADER_MAJOR_VERSION) {
+			throw new IOException(
+					"Unsupported MEF version: header reports major version " + major
+							+ "." + mefHeader.getHeaderVersionMinor()
+							+ ", this reads MEF" + MefHeader2.HEADER_MAJOR_VERSION + " only");
+		}
+
 		this.decompressData = decompressData;
 	}
 

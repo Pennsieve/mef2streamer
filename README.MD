@@ -1,35 +1,229 @@
-# MEF to EDF
+# mef2streamer
 
-## Usage 
-This code converts .mef (MEf2) files into .edf (EDF) files. This is used for time series data, specifically eeg or ieeg data. This code is used to transfer all the data from ieeg.org to Pennsieve. 
+Reads MEF2 files (Multiscale Electrophysiology Format — EEG/iEEG time series)
+and streams the decoded samples to stdout as length-prefixed binary frames. This
+is how iEEG.org recordings get into Pennsieve.
 
-## Running
+**MEF2 only.** The header version is checked on open and anything else is
+refused — see [Supported formats](#supported-formats).
 
-Application expects a single argument as an input.
+This repo was formerly `edfwriter` and wrote EDF files. It no longer does, and
+no EDF code remains: it decodes MEF and emits a frame stream, and something
+downstream decides what to write.
 
-This argument is a path to a folder where all the MEF files (mef2) are located. The name of the folder is assumed to be the subject ID and will be used as the naming convention. 
+## How it's used
 
-If you're building in Eclipse you can go to Run > Run Configurations and add the path as an argument ex: `/Users/ddefreitas/Documents/sub-001/`
+The only consumer is
+[processor-mef-timeseries](https://github.com/Pennsieve/processor-mef-timeseries).
+Its Dockerfile clones this repo, builds it with Maven, and copies the result in
+as `mefstreamer.jar`. At runtime the Python processor launches that jar as a
+subprocess, reads the frames off its stdout, and assembles them into NWB.
 
-With the example path above there are .mef files which the script will pick up and create EDFs for. Each mef file is a channel and the script will produce 1 to x edfs for each channel based on discontinuities.
+```
+ .mef files ──> [ this repo, as mefstreamer.jar ] ──frames on stdout──>
+                                                    processor-mef-timeseries ──> output.nwb
+```
 
-EDFs will be output in the same input folder.
+The processor's build arg for this repo — still named `EDFWRITER_REF`, renamed
+alongside the rest of the cross-repo cleanup — defaults to `main`, so **anything
+merged to main here ships on the next processor image build.** There is no
+release or tag step. Pin it to a SHA if you need a build to stay put.
 
-The code reads in all of the blocks of one MEF channel and calculates the time difference between each block. If the time difference betweeen blocks is greater than two times the sampling frequency, then a cut is created for a new edf. The code then goes back and finds the local min and max across each channel and scales the data according to EDF spec. Once the data is scaled, it is written out to an EDF and the process begins again until all of the mef data is read. 
+## Supported formats
 
+MEF2, and nothing else. `MEFStreamer` reads the header version and throws before
+decoding a block if the major version is not 2.
 
-## Useful tools (Mac OS)
+This matters because MEF header fields sit at fixed byte offsets. Without the
+check, a file in another format parses "successfully" into meaningless values and
+streams out as plausible-looking samples — a silent wrong answer rather than an
+error.
 
-- Hex Fiend for viewing EDF files https://hexfiend.com/
-- EDF browser for viewing EDFs https://formulae.brew.sh/cask/edfbrowser
+- **MEF3** is a different format entirely: a directory tree (`.mefd`/`.timd`/
+  `.segd`) with different compression, not one flat file per channel. It is also
+  never picked up, since only `*.mef` is globbed.
+- **MEF1** is refused. `MefHeader2` still carries branches for the pre-2.0 field
+  ordering, but they have no test fixture and the RED block decode was never
+  verified against MEF1.
+- **Encrypted MEF** is refused: `Unsupported: encrypted data`.
 
-## EDF spec
+## Build
 
-Basing code off the base EDF spec: https://www.edfplus.info/specs/edf.html
+```
+mvn package        # target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar
+mvn test
+```
 
+Java 8 source level, Maven, JUnit 4.
 
-## Time Series Graphing 
+The build currently also writes a byte-identical copy at the old
+`mef2edf-0.0.1-SNAPSHOT-jar-with-dependencies.jar` name, because
+processor-mef-timeseries copies that exact path and builds this repo from `main`
+by default. Both names ship until that repo is pointed at the new one; the alias
+and its `maven-antrun-plugin` execution come out then.
 
-The branch TimeSeriesGraphing allows the user to graph subsets of their data in order to validate the efficacy of the converter. This branch does not write out edf, but completes all necessary steps in order to properly calculate scaling. The user will need to update the startrange and endrange values in order to pull out only the block of interest. The time is printed in epoch and can be converted in order to compare to graphed mef data (ex. on ieeg.org).
+## Run
 
-If using ieeg.org, the start time is set to 0 on the graphing tool and the timing will need to be adjusted in accordance with the real start time of the first edf/mef file. 
+```
+java -jar target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar <input-dir>
+```
+
+`<input-dir>` is a directory of `.mef` files. One file is one channel, and the
+channel name is the filename without its extension (`EEG AD 01-Ref.mef` →
+`EEG AD 01-Ref`). The directory name is read as the subject ID.
+
+stdout is the frame stream and nothing else. All logging goes to stderr, so
+redirect stdout to a file or a pipe — don't read it in a terminal.
+
+## Selecting channels
+
+`MEF_CHANNELS` limits the run to named channels. Unset or empty converts
+everything in the directory.
+
+```
+MEF_CHANNELS=A1,B2 java -jar mefstreamer.jar /data/input
+
+# names containing spaces are fine; quote the whole value
+MEF_CHANNELS="EEG AD 01-Ref,EEG PT 01-Ref" java -jar mefstreamer.jar /data/input
+```
+
+- Comma-separated. Whitespace around each entry is trimmed; spaces *inside* a
+  name are part of it.
+- Matched case-insensitively against the `.mef` filename minus its extension —
+  the same string that appears as `name` in `CHANNEL_META`.
+- Output order follows the directory listing, not the order you list names in.
+- **If any requested name matches no file, nothing is converted.** The run prints
+  the missing names and the available ones to stderr and exits 1, before writing
+  a single frame. Converting the subset that happened to match would look like a
+  successful run that is quietly short a channel.
+
+## Exit codes
+
+`0` only on a complete conversion. `1` for: no argument, path is not a
+directory, no `.mef` files found, an unmatched `MEF_CHANNELS` name, a file that
+is not MEF2, or an IO error mid-stream.
+
+Note for anyone reading the stream: a non-zero exit can arrive after frames have
+already been written, so check the exit code rather than assuming a stream that
+started cleanly finished cleanly.
+
+## Output protocol
+
+Every frame is `[type:1][length:4 LE][payload]`, with all multi-byte numbers
+little-endian. Frames are flushed as they are produced.
+
+| Type | Name | Payload |
+|---|---|---|
+| 1 | `CHANNEL_META` | UTF-8 JSON; opens a channel |
+| 2 | `SEGMENT_START` | `int64` start time (µs) + `float64` rate (Hz) |
+| 3 | `SAMPLES_INT32` | raw A/D counts, `int32` each |
+| 4 | `SEGMENT_END` | `int64` last sample time (µs) + `int64` sample count |
+| 5 | `END` | empty; sent once, after the last channel |
+
+Channels are emitted one after another. A `CHANNEL_META` frame means the
+previous channel is finished and a new one has begun; there is no explicit
+channel-end frame. Within a channel there is one or more
+`SEGMENT_START … SAMPLES_INT32 … SEGMENT_END` groups.
+
+### CHANNEL_META
+
+```json
+{
+  "name": "Sin_10Hz",
+  "type": "Unknown",
+  "description": "Unknown signal type",
+  "unit": "counts",
+  "voltage_conversion_factor": 0.030518043793392843,
+  "low_cut_hz": 0.0,
+  "high_cut_hz": 0.0,
+  "rate_hz": 800.0,
+  "reported_start_us": 1549986912000000,
+  "reported_end_us": 1549986927000000
+}
+```
+
+`reported_*` are the MEF header's own claimed bounds. They are not verified
+against the blocks actually read, and can disagree with the segment times.
+
+`low_cut_hz` and `high_cut_hz` come straight from the header and are frequently
+`0.0`, meaning "not recorded" rather than "no filter".
+
+### Samples are counts, not volts
+
+`SAMPLES_INT32` carries raw A/D counts. `voltage_conversion_factor` is the
+microvolts-per-count scale from the MEF header, and multiplying by it is the only
+thing that turns the samples into a physical measurement.
+
+Its default is `1.0`, which is indistinguishable from a genuine 1.0 µV/count. A
+header that failed to populate therefore yields counts silently passed off as
+microvolts. The processor warns when the field is missing entirely.
+
+### Segments and gaps
+
+A channel is split into segments wherever the recording has a gap. Each MEF
+block's start time is compared to where the previous block's samples should have
+ended; if it differs by more than a quarter of one sampling period, the current
+segment is closed and a new one opened. A continuous recording produces exactly
+one segment.
+
+### Channel type
+
+`type` and `description` are guessed from the filename — a case-insensitive
+substring test, first match wins, in this order:
+
+| Filename contains | type |
+|---|---|
+| `grid` | `ECOG` |
+| `seeg` or `depth` | `SEEG` |
+| `eeg` | `EEG` |
+| `eog` | `EOG` |
+| `ecg` or `ekg` | `ECG` |
+| `emg` | `EMG` |
+| *none of the above* | `Unknown` |
+
+It is a guess from a filename, not a reading of the file. Order matters:
+`EEG depth 3` is tagged `SEEG`, because `depth` is tested before `eeg`.
+
+## Local development against the processor
+
+To run the full pipeline against your working tree instead of the jar built from
+GitHub, drop a `docker-compose.override.yml` into `processor-mef-timeseries`
+that bind-mounts your local jar over the one in the image:
+
+```yaml
+services:
+  processor:
+    volumes:
+      - ./data/input:/data/input
+      - ./data/output:/data/output
+      - ../mef2streamer/target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar:/processor/mefstreamer.jar:ro
+    environment:
+      MEF_CHANNELS: "${MEF_CHANNELS:-}"
+```
+
+Compose merges that automatically, so `mvn package` here then `make run` there
+picks it up with no extra flags.
+
+## Verifying a change didn't alter the output
+
+Don't diff `output.nwb` between runs — the processor stamps it with a fresh
+`uuid4` each time, so two runs of identical code produce different files.
+
+Compare this jar's stdout instead. It is deterministic and it is the whole output
+of this repo:
+
+```
+java -jar target/mef2streamer-0.0.1-SNAPSHOT-jar-with-dependencies.jar "$IN" 2>/dev/null | shasum -a 256
+```
+
+Build the baseline commit in a `git worktree` and hash it the same way.
+
+## References
+
+- MEF / RED compression: the decoder in `edu.upenn.cis.thirdparty.RED`
+- NWB: https://www.nwb.org/
+- EDF spec (historical — this repo no longer writes EDF):
+  https://www.edfplus.info/specs/edf.html
+
+Useful on macOS: [Hex Fiend](https://hexfiend.com/) for eyeballing the binary
+stream.
