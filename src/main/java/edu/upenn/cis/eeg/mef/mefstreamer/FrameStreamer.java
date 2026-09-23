@@ -8,7 +8,11 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
+import java.util.NoSuchElementException;
 
 import edu.upenn.cis.db.mefview.services.TimeSeriesPage;
 
@@ -20,6 +24,10 @@ public class FrameStreamer {
     private static final int SAMPLES_INT32 = 3;
     private static final int SEGMENT_END   = 4;
     private static final int END           = 5;
+
+    /** Blocks decoded per read. Bounds memory; see pagesInBatches. */
+    static final String BATCH_ENV_VAR = "MEF_BLOCK_BATCH";
+    static final int DEFAULT_BLOCK_BATCH = 512;
 
     private final File[] files;
     private final String directoryPath;
@@ -201,7 +209,8 @@ public class FrameStreamer {
 
                 // ---- Stream pages ----
                 int blockIdx = 0;
-                for (TimeSeriesPage page : streamer.getNextBlocks((int) totalBlocks)) {
+                for (TimeSeriesPage page :
+                        pagesInBatches(streamer::getNextBlocks, blockBatch())) {
                     blockIdx++;
                     if (page == null) continue;
                     final long pageStartUs = page.timeStart;
@@ -280,5 +289,89 @@ public class FrameStreamer {
         System.err.println("JAVA: All channels done; sending END");
         fr.send(END, new byte[0]);
         fr.flush();
+    }
+
+    /**
+     * Blocks to decode per read, from MEF_BLOCK_BATCH or the default.
+     *
+     * Only memory and read size depend on it. The frames produced are
+     * identical whatever it is set to, so it is safe to tune on a box that is
+     * short of heap.
+     */
+    static int blockBatch() {
+        final String raw = System.getenv(BATCH_ENV_VAR);
+        if (raw == null || raw.trim().isEmpty()) return DEFAULT_BLOCK_BATCH;
+        try {
+            final int value = Integer.parseInt(raw.trim());
+            if (value > 0) return value;
+        } catch (NumberFormatException ignored) {
+            // fall through to the default rather than fail a long conversion
+        }
+        System.err.println("JAVA: ignoring " + BATCH_ENV_VAR + "=" + raw
+                + "; expected a positive integer, using " + DEFAULT_BLOCK_BATCH);
+        return DEFAULT_BLOCK_BATCH;
+    }
+
+    /**
+     * One channel's pages, decoded a batch at a time rather than all at once.
+     *
+     * getNextBlocks decompresses every block it is asked for into a list before
+     * it returns, so asking for a whole channel holds the whole channel in
+     * memory. A 379MB MEF of 770k blocks becomes gigabytes of int arrays, and
+     * nothing reaches stdout until the last block is decoded -- which reads
+     * downstream as a hang rather than as work in progress.
+     *
+     * Pulling a batch at a time bounds that to batchSize pages and starts the
+     * frames flowing immediately. The page sequence is unchanged, so every
+     * frame this produces is byte-identical to reading the channel whole.
+     */
+    /**
+     * Where pages come from. MEFStreamer::getNextBlocks in production; the
+     * batching does not otherwise care what is behind it, which is also what
+     * makes the seam testable without a MEF file.
+     */
+    interface PageReader {
+        List<TimeSeriesPage> read(int noBlocks) throws IOException;
+    }
+
+    static Iterable<TimeSeriesPage> pagesInBatches(
+            final PageReader reader, final int batchSize) {
+        return new Iterable<TimeSeriesPage>() {
+            @Override
+            public Iterator<TimeSeriesPage> iterator() {
+                return new Iterator<TimeSeriesPage>() {
+                    private List<TimeSeriesPage> batch = Collections.emptyList();
+                    private int index = 0;
+
+                    @Override
+                    public boolean hasNext() {
+                        while (index >= batch.size()) {
+                            try {
+                                batch = reader.read(batchSize);
+                            } catch (IOException e) {
+                                throw new RuntimeException(
+                                        "reading MEF blocks", e);
+                            }
+                            index = 0;
+                            // A short read means the file is done; getNextBlocks
+                            // returns early only when no blocks remain.
+                            if (batch.isEmpty()) return false;
+                        }
+                        return true;
+                    }
+
+                    @Override
+                    public TimeSeriesPage next() {
+                        if (!hasNext()) throw new NoSuchElementException();
+                        return batch.get(index++);
+                    }
+
+                    @Override
+                    public void remove() {
+                        throw new UnsupportedOperationException();
+                    }
+                };
+            }
+        };
     }
 }
